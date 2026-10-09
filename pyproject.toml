@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pd-modules"
+version = "0.1.0"
+description = "Reusable modules for probability of default modeling"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pandas", "scipy", "scikit-learn"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["calibrator*", "eda*", "estimators*", "feature_selection*", "monitor*", "preprocessing*", "utils*"]

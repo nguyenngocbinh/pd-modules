@@ -1,0 +1,11 @@
+name: pd-modules
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pip
+  - pip:
+      - numpy
+      - pandas
+      - scipy
+      - scikit-learn
