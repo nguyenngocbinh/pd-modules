@@ -20,6 +20,7 @@ Usage:
 """
 
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.utils.validation import check_is_fitted
 from optbinning import BinningProcess
 import pandas as pd
 import numpy as np
@@ -28,57 +29,67 @@ from matplotlib import pyplot as plt
 
 class DynamicBinningProcess(TransformerMixin, BaseEstimator):
     """
-    Sklearn compatible optbinning
-
-    Parameters:
-    -----------------
-    binning_process_params: dict
-        dictionary of binning params that will be applied across all columns, except for object ones
-    monotonic_trends: dict, optional
-        dictionary mapping variable names to monotonic trend constraints
-        e.g., {"OS": "ascending", "income": "descending"}
-        Valid values: "ascending", "descending", "auto", "auto_asc_desc", "auto_heuristic", "peak", "valley"
-    """
-    """
     Sklearn-compatible wrapper for `optbinning.BinningProcess`.
 
     This class builds per-variable `binning_fit_params` from a base
     `binning_process_params` dict and optional per-variable overrides.
+    It automatically filters features based on a specified predictive power
+    metric (e.g., IV, Gini, JS) evaluated during the fitting process.
 
     Parameters
     ----------
+    selection_metric : None or str, default=None
+        The metric used to evaluate and filter variables. Supported values
+        include 'iv' (Information Value), 'gini' (Gini Index), 'js' (Jensen-Shannon), etc.
+    metric_min : float, default=0.2
+        Minimum metric threshold for variable selection.
+    metric_max : float, optional, default=None
+        Maximum metric threshold for variable selection. If None, no upper bound is applied.
+    n_jobs : int, default=-1
+        Number of parallel jobs for `BinningProcess`.
     binning_process_params : dict or None
         Base parameters passed to `BinningProcess` for each variable.
+    verbose : bool, default=True
+        Whether to print calculation errors during the binning process.
     monotonic_trends : dict, optional
-        Per-variable monotonic trend constraints (e.g. {"age": "ascending"}).
+        Per-variable monotonic trend constraints (e.g., {"age": "ascending"}).
+        Valid values: "ascending", "descending", "auto", "auto_asc_desc", "auto_heuristic", "peak", "valley"
     user_splits : dict, optional
         Per-variable explicit split points (lists) to pass as
         `user_splits` to `BinningProcess`.
-    n_jobs : int, default=1
-        Number of parallel jobs for `BinningProcess`.
     """
 
     def __init__(
         self,
+        selection_metric=None,
+        metric_min=0.2,
+        metric_max=None,
+        n_jobs=-1,
         binning_process_params=None,
+        verbose=True,
         monotonic_trends=None,
         user_splits=None,
-        n_jobs=1,
     ):
-        self.binner = None
+        self.selection_metric = selection_metric
+        self.metric_min = metric_min
+        self.metric_max = metric_max
         self.n_jobs = n_jobs
-        self.binning_process_params = binning_process_params
+        self.binning_process_params = binning_process_params or {}
+        self.selected_features = None
+        self.binner = None
+        self.metric_values = None
+        self.verbose = verbose
         self.monotonic_trends = monotonic_trends or {}
         self.user_splits = user_splits or {}
 
     def fit(self, X, y):
-        # Update binning parameters based on selected columns
         """
         Fit the internal `BinningProcess` on features `X` and target `y`.
 
         Builds per-variable `binning_fit_params` by copying
         `binning_process_params` and applying any per-variable
         `monotonic_trends` and `user_splits` overrides before fitting.
+        Filters features based on the selected metric thresholds.
 
         Returns
         -------
@@ -86,15 +97,16 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
         """
         self.feature_names_in_ = X.columns.to_list()
 
-        self.categorical_features_ = X.select_dtypes(
-            include="object").columns.to_list()
+        self.categorical_features_ = X.select_dtypes(include="object").columns.to_list()
 
         # Build binning params for each variable
         self.binning_fit_params_full_ = {}
         for col in self.feature_names_in_:
             params = self.binning_process_params.copy()
 
-            if 'monotonic_trend' not in params or params["monotonic_trend"] != self.monotonic_trends.get(col):
+            if "monotonic_trend" not in params or params[
+                "monotonic_trend"
+            ] != self.monotonic_trends.get(col):
                 params["monotonic_trend"] = self.monotonic_trends.get(col)
 
             if col in self.user_splits:
@@ -109,17 +121,63 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
             categorical_variables=self.categorical_features_,
         )
         self.binner.fit(X, y)
+
+        if self.selection_metric:
+
+            # Get metric values from binning process
+            self.metric_values = {}
+            self.selected_features = []
+
+            # Convert metric name to lowercase to match optbinning attributes (iv, gini, js)
+            target_attr = self.selection_metric.lower()
+
+            for variable in self.feature_names_in_:
+                try:
+                    # Get the binning table for each variable
+                    binning_obj = self.binner.get_binned_variable(variable)
+
+                    # Access the specified metric from binning table properties
+                    binning_table = binning_obj.binning_table
+                    metric_value = getattr(binning_table, target_attr)
+
+                    self.metric_values[variable] = metric_value
+
+                    # Select features based on Metric threshold
+                    if self.metric_min <= metric_value:
+                        if self.metric_max is None or metric_value <= self.metric_max:
+                            self.selected_features.append(variable)
+
+                except AttributeError:
+                    if self.verbose:
+                        print(
+                            f"Metric '{self.selection_metric}' is not valid for variable {variable}."
+                        )
+                    self.metric_values[variable] = -1.0
+                except Exception as e:
+                    if self.verbose:
+                        print(
+                            f"Could not calculate {self.selection_metric.upper()} for variable {variable}: {str(e)}"
+                        )
+                    # Use -1 to indicate error in metric calculation
+                    self.metric_values[variable] = -1.0
+
+        else:
+            self.selected_features = self.feature_names_in_
+            self.metric_values = {}
+
         return self
 
     def transform(self, X):
         """
         Transform `X` using the fitted `BinningProcess`.
 
-        Returns binned DataFrame-like object produced by `BinningProcess.transform`.
+        Returns binned DataFrame-like object produced by `BinningProcess.transform`
+        containing only the features that met the selection criteria.
         """
+        check_is_fitted(self, "selected_features")
         return self.binner.transform(
             X, metric_missing="empirical", metric_special="empirical"
-        )
+        )[self.selected_features]
 
     def fit_transform(self, X, y):
         """
@@ -127,11 +185,11 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
 
         Convenience wrapper around `fit` + `transform`.
         """
-        # Combine fit and transform for convenience
         self.fit(X, y)
         return self.transform(X)
 
     def get_binning_summary(self):
+        check_is_fitted(self, "binner")
         return self.binner.summary()
 
     def get_feature_names_in(self):
@@ -162,15 +220,18 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
             Concatenated binning tables for requested features (drops zero
             count rows and the Totals row for each variable).
         """
+        check_is_fitted(self, "binner")
         if features is None:
             features = self.get_feature_names_in()
         binning_tables = []
         for feature in features:
             binning_table = self.binner.get_binned_variable(
-                feature).binning_table.build()
+                feature
+            ).binning_table.build()
             binning_table["Feature"] = feature
             binning_table = binning_table.drop(
-                index=binning_table.index[-1])  # drop Totals row
+                index=binning_table.index[-1]
+            )  # drop Totals row
             binning_tables.append(binning_table)
         table = pd.concat(binning_tables, ignore_index=True)
         cols = list(table.columns)
@@ -202,14 +263,16 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
             ft = table.query(f"Feature == '{feature}'").copy()
 
             # ── drop the Totals row for plotting but keep it for the table ──
-            plot_ft = ft[~ft["Bin"].astype(
-                str).str.lower().str.startswith("total")]
+            plot_ft = ft[~ft["Bin"].astype(str).str.lower().str.startswith("total")]
 
             bins = plot_ft["Bin"].astype(str).tolist()
             non_events = plot_ft["Non-event"].tolist()
             events = plot_ft["Event"].tolist()
-            line_vals = plot_ft["WoE"].tolist(
-            ) if metric == "WoE" else plot_ft["Event rate"].tolist()
+            line_vals = (
+                plot_ft["WoE"].tolist()
+                if metric == "WoE"
+                else plot_ft["Event rate"].tolist()
+            )
             line_label = "WoE" if metric == "WoE" else "Event rate"
 
             fig, ax1 = plt.subplots(figsize=(max(10, len(bins) * 1.4), 6))
@@ -218,10 +281,18 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
             width = 0.6
 
             # Stacked bars
-            bars_ne = ax1.bar(x, non_events, width,
-                              label="Non-event", color="#378ADD", alpha=0.85)
-            bars_ev = ax1.bar(x, events, width, bottom=non_events,
-                              label="Event", color="#FF8103", alpha=0.85)
+            bars_ne = ax1.bar(
+                x, non_events, width, label="Non-event", color="#378ADD", alpha=0.85
+            )
+            bars_ev = ax1.bar(
+                x,
+                events,
+                width,
+                bottom=non_events,
+                label="Event",
+                color="#FF8103",
+                alpha=0.85,
+            )
 
             ax1.set_xlabel("Bin", fontsize=11)
             ax1.set_ylabel("Count", fontsize=11)
@@ -232,55 +303,130 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
 
             # Line on secondary axis
             ax2 = ax1.twinx()
-            ax2.plot(x, line_vals, color="#FD0000", marker="o", linewidth=2,
-                     markersize=5, label=line_label, zorder=5)
+            ax2.plot(
+                x,
+                line_vals,
+                color="#FD0000",
+                marker="o",
+                linewidth=2,
+                markersize=5,
+                label=line_label,
+                zorder=5,
+            )
             ax2.axhline(0, color="gray", linewidth=0.8, linestyle="--")
             ax2.set_ylabel(line_label, fontsize=11, color="#FF0000")
             ax2.tick_params(axis="y", labelcolor="#FF0000")
             ax2.legend(loc="upper right", fontsize=9)
 
             plt.title(
-                f"{feature}  —  Count distribution & {line_label}", fontsize=12, pad=12)
+                f"{feature}  —  Count distribution & {line_label}", fontsize=12, pad=12
+            )
             plt.tight_layout()
             if save_dir:
-                plt.savefig(f"{save_dir}/{feature}.png", bbox_inches='tight')
+                plt.savefig(f"{save_dir}/{feature}.png", bbox_inches="tight")
                 plt.close()
             else:
                 plt.show()
 
             # ── Binning table ──────────────────────────────────────────────
-            display_cols = ["Feature", "Bin", "Count", "Count (%)", "Non-event", "Event",
-                            "Event rate", "WoE", "IV", "JS"]
+            display_cols = [
+                "Feature",
+                "Bin",
+                "Count",
+                "Count (%)",
+                "Non-event",
+                "Event",
+                "Event rate",
+                "WoE",
+                "IV",
+                "JS",
+            ]
             print_cols = [c for c in display_cols if c in ft.columns]
 
             fmt = {
-                "Count (%)":  "{:.2%}".format,
+                "Count (%)": "{:.2%}".format,
                 "Event rate": "{:.2%}".format,
-                "WoE":        "{:.4f}".format,
-                "IV":         "{:.4f}".format,
-                "JS":         "{:.4f}".format,
+                "WoE": "{:.4f}".format,
+                "IV": "{:.4f}".format,
+                "JS": "{:.4f}".format,
             }
-            styled = ft[print_cols].style.format(
-                {k: v for k, v in fmt.items() if k in print_cols}
-            ).set_caption(f"Binning table — {feature}")
+            styled = (
+                ft[print_cols]
+                .style.format({k: v for k, v in fmt.items() if k in print_cols})
+                .set_caption(f"Binning table — {feature}")
+            )
 
             try:
                 from IPython.display import display
+
                 display(styled)
             except ImportError:
                 print(ft[print_cols].to_string(index=False))
             print()
 
+    def get_selection_summary(self):
+        """
+        Returns a summary table of why each feature was selected or not based on the chosen metric.
 
-if __name__ == '__main__':
+        Returns:
+            pd.DataFrame: DataFrame containing feature names, metric values, and selection reasons.
+        """
+        if self.selection_metric:
+            check_is_fitted(self, "feature_names_in_")
+
+            summary_data = []
+            metric_name_upper = self.selection_metric.upper()
+
+            for feature in self.feature_names_in_:
+                metric_val = self.metric_values.get(feature, 0.0)
+
+                in_min = metric_val >= self.metric_min
+                in_max = self.metric_max is None or metric_val <= self.metric_max
+                selected = "Selected" if in_min and in_max else "Not Selected"
+
+                if in_min and in_max:
+                    reason = (
+                        f"{self.metric_min} <= {metric_name_upper} <= {self.metric_max}"
+                        if self.metric_max is not None
+                        else f"{metric_name_upper} >= {self.metric_min}"
+                    )
+                elif not in_min:
+                    reason = f"{metric_name_upper} < {self.metric_min}"
+                else:
+                    reason = f"{metric_name_upper} > {self.metric_max}"
+
+                summary_data.append(
+                    {
+                        "feature": feature,
+                        self.selection_metric: metric_val,
+                        "selection_status": selected,
+                        "reason": reason,
+                    }
+                )
+
+            summary_df = pd.DataFrame(summary_data)
+            return summary_df.sort_values(
+                by=self.selection_metric, ascending=False
+            ).reset_index(drop=True)
+
+        else:
+            return None
+
+
+if __name__ == "__main__":
     from sklearn.datasets import make_classification
     from sklearn.model_selection import train_test_split
 
+    n_feat = 5
     # Create synthetic dataset
-    X, y = make_classification(n_samples=1000, n_features=3,
-                               n_informative=3, n_redundant=0,
-                               random_state=42)
-    df = pd.DataFrame(X, columns=[f"Feature_{i}" for i in range(1, 4)])
+    X, y = make_classification(
+        n_samples=1000,
+        n_features=n_feat,
+        n_informative=3,
+        n_redundant=0,
+        random_state=42,
+    )
+    df = pd.DataFrame(X, columns=[f"Feature_{i}" for i in range(1, n_feat + 1)])
     df["Target"] = y
 
     # Split into train and test sets
@@ -289,11 +435,14 @@ if __name__ == '__main__':
     )
 
     # Initialize and fit DynamicBinningProcess
-    binning_params = {"max_n_bins": 5, "monotonic_trend": 'auto'}
+    binning_params = {"max_n_bins": 5, "monotonic_trend": "auto"}
     monotonic_trends = {"Feature_1": "ascending", "Feature_2": "descending"}
     user_splits = {"Feature_3": [0.5]}  # Example of user-defined split
 
+    # Now using IV (Information Value) to filter variables instead of Gini
     binning_process = DynamicBinningProcess(
+        selection_metric="iv",
+        metric_min=0.1,  # e.g., standard threshold for "medium" predictive power
         binning_process_params=binning_params,
         monotonic_trends=monotonic_trends,
         user_splits=user_splits,
@@ -301,9 +450,14 @@ if __name__ == '__main__':
     )
     binning_process.fit(X_train, y_train)
 
-    # Generate binning tables and plots for all features
-    table = binning_process.generate_binning_tables()
-    print(table.head())
+    # Check the selection reasoning
+    print("\nFeature Selection Summary:")
+    print(binning_process.get_selection_summary())
+
+    # Generate binning tables and plots for selected features
+    table = binning_process.generate_binning_tables(binning_process.selected_features)
+    print("\nBinning Tables:")
+    print(table)
 
     # plot
     binning_process.generate_plot(metric="Event rate")
