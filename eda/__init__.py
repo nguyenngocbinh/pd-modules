@@ -1,1 +1,1 @@
-"""Exploratory data analysis tools."""
+from .summary import summary
