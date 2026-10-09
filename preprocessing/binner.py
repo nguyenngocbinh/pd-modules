@@ -174,10 +174,11 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
         Returns binned DataFrame-like object produced by `BinningProcess.transform`
         containing only the features that met the selection criteria.
         """
-        check_is_fitted(self, "selected_features")
-        return self.binner.transform(
+        check_is_fitted(self, "feature_names_in_")
+        transformed = self.binner.transform(
             X, metric_missing="empirical", metric_special="empirical"
-        )[self.selected_features]
+        )
+        return transformed.loc[:, self.selected_features]
 
     def fit_transform(self, X, y):
         """
@@ -189,7 +190,7 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
         return self.transform(X)
 
     def get_binning_summary(self):
-        check_is_fitted(self, "binner")
+        check_is_fitted(self, "feature_names_in_")
         return self.binner.summary()
 
     def get_feature_names_in(self):
@@ -200,9 +201,17 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
         return self.feature_names_in_
 
     def get_feature_names_out(self, input_features=None):
-        if input_features is None:
-            return self.get_feature_names_in()
-        return input_features
+        """Return output feature names after optional feature selection."""
+        check_is_fitted(self, "feature_names_in_")
+
+        if input_features is not None:
+            input_features = list(input_features)
+            if input_features != self.feature_names_in_:
+                raise ValueError(
+                    "input_features must match the feature names seen during fit."
+                )
+
+        return np.asarray(self.selected_features, dtype=object)
 
     def generate_binning_tables(self, features=None):
         """
@@ -220,7 +229,7 @@ class DynamicBinningProcess(TransformerMixin, BaseEstimator):
             Concatenated binning tables for requested features (drops zero
             count rows and the Totals row for each variable).
         """
-        check_is_fitted(self, "binner")
+        check_is_fitted(self, "feature_names_in_")
         if features is None:
             features = self.get_feature_names_in()
         binning_tables = []
