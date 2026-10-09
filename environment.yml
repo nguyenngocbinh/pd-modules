@@ -1,11 +1,19 @@
-name: pd-modules
+name: env_ml
 channels:
+  - defaults
   - conda-forge
 dependencies:
-  - python>=3.10
+  - python=3.11.7
+  - numpy=2.4.4
+  - pandas=3.0.2
+  - pytest
+  - scikit-learn=1.8.0
+  - matplotlib=3.10.8
+  - scipy=1.17.1
+  - joblib=1.5.3
+  - pygments
+  - tqdm=4.67.3
+  - statsmodels=0.14.6
   - pip
   - pip:
-      - numpy
-      - pandas
-      - scipy
-      - scikit-learn
+    - optbinning==0.21.0

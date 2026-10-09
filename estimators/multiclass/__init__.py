@@ -1,1 +1,1 @@
-"""Estimators for multiclass classification."""
+from .mlp import MLPMulticlassClassifier

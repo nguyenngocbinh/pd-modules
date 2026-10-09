@@ -1,15 +1,27 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pd-modules"
 version = "0.1.0"
-description = "Reusable modules for probability of default modeling"
+authors = [
+  { name="Internal ML Team", email="dev@example.com" },
+]
+description = "A library of machine learning tools, including preprocessing, feature selection, estimators, and model monitoring."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "scipy", "scikit-learn"]
+dependencies = [
+    "numpy>=2.2.6",
+    "pandas>=2.2.0",
+    "scikit-learn>=1.3.0",
+    "matplotlib>=3.10.8",
+    "scipy>=1.17.1",
+    "joblib>=1.5.3",
+    "tqdm>=4.67.3",
+    "statsmodels>=0.14.6",
+    "optbinning>=0.21.0",
+]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["calibrator*", "eda*", "estimators*", "feature_selection*", "monitor*", "preprocessing*", "utils*"]
+[tool.setuptools]
+packages = {find = {}}

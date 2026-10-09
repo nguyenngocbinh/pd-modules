@@ -1,4 +1,2 @@
-"""Backward-compatible setuptools entry point."""
-from setuptools import setup
-
-setup()
+from setuptools import setup, find_packages
+setup(name='pd-modules', version='0.1.0', packages=find_packages())
