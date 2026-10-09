@@ -1,1 +1,2 @@
-"""Estimators for binary classification."""
+from .logistic import SMLogit
+from .mlp import MLPBinaryClassifier
